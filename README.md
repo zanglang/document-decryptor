@@ -1,15 +1,14 @@
 # document-decryptor
 
-A small, narrowly-scoped HTTP service that decrypts password-protected PDFs.
-It is designed to be called from an n8n workflow running inside the same
-Kubernetes cluster: n8n handles email retrieval, attachment download, and
-Google Drive upload; this service does exactly one thing — pick the right
-password from a small configured list and run `qpdf` to decrypt the PDF.
+A small, narrowly-scoped HTTP service that decrypts password-protected
+PDFs. Given an encrypted PDF and a list of identifying strings, it picks a
+password from a small configured list based on substring matches, decrypts
+the PDF with `qpdf`, and streams the result back.
 
 ## Purpose
 
-Given an encrypted PDF and a list of "identifying strings" (sender email,
-email subject, filename, etc.), the service:
+Given an encrypted PDF and a list of "identifying strings" (e.g. sender
+email, email subject, filename), the service:
 
 1. matches the identifiers against a small set of configured substrings
 2. picks the password for the single matching entry
@@ -18,28 +17,8 @@ email subject, filename, etc.), the service:
 
 There is no database, no authentication, no outbound network calls, and no
 retry logic. Configuration is a flat JSON file re-read on every request, so
-it can be updated in place (e.g. via a Kubernetes Secret volume) without a
+it can be updated in place (e.g. via a mounted Kubernetes Secret) without a
 restart.
-
-## Architecture / flow
-
-```text
-Gmail
-  |
-n8n
-  |
-POST PDF + identifiers
-  |
-document-decryptor
-  |-- load patterns.json
-  |-- identify exactly one profile
-  |-- run qpdf
-  |-- return decrypted PDF
-  |
-n8n
-  |
-Google Drive
-```
 
 ## Project layout
 
@@ -53,9 +32,111 @@ document-decryptor/
 │   └── handler.go          HTTP handlers (/healthz, /decrypt)
 ├── example/patterns.json   example configuration
 ├── k8s/                    example Deployment/Service/Secret manifests
+├── .github/workflows/      CI and release GitHub Actions
 ├── Dockerfile
 └── .dockerignore
 ```
+
+## API
+
+### `GET /healthz`
+
+Returns `200 OK` with:
+
+```json
+{ "status": "ok" }
+```
+
+### `POST /decrypt`
+
+`Content-Type: multipart/form-data` with two parts:
+
+- `identifiers` — a JSON-encoded array of strings (any identifying text:
+  sender address, subject line, filename, etc.)
+- `file` — the encrypted PDF binary
+
+On success, returns `200 OK` with `Content-Type: application/pdf` and the
+decrypted PDF as the body, plus:
+
+- `X-Document-Profile` — the configured profile `name` that was used
+- `X-Matched-Pattern` — the configured substring that matched
+
+See [`patterns.json` format](#patternsjson-format) and [Error
+responses](#error-responses) below.
+
+## `curl` example
+
+```bash
+curl \
+  -F 'identifiers=["statements@example-bank.com","August 2026 Credit Card Statement","statement-202608.pdf"]' \
+  -F 'file=@encrypted.pdf;type=application/pdf' \
+  http://localhost:8080/decrypt \
+  -o decrypted.pdf
+```
+
+## `patterns.json` format
+
+```json
+{
+  "payslip": {
+    "name": "company-payslip",
+    "password": "PASSWORD_A"
+  },
+  "statements@example-bank.com": {
+    "name": "example-bank-account",
+    "password": "PASSWORD_B"
+  },
+  "credit card statement": {
+    "name": "example-bank-credit-card",
+    "password": "PASSWORD_C"
+  }
+}
+```
+
+- The top-level JSON object maps a **matching substring** to a profile.
+- `name` is an opaque label returned in the `X-Document-Profile` response
+  header and used in logs — it never contains the password.
+- `password` is the qpdf password used when this pattern is the single
+  match.
+- The `Profile` Go struct only has `name` and `password` today but is
+  designed so additional metadata fields can be added later without
+  changing matching or decryption logic.
+
+Matching is a case-insensitive substring search of each pattern against
+every supplied identifier. There is no regex or fuzzy matching. Exactly one
+pattern must match; zero or multiple matches are treated as errors (see
+below).
+
+## Error responses
+
+All errors are returned as JSON: `{"error": "...", "details": [...]}`
+(`details` is omitted when not applicable — e.g. it lists the matched
+pattern names on a `409`).
+
+| Status | Meaning                                                       |
+|--------|----------------------------------------------------------------|
+| 400    | Malformed request: invalid/malformed `identifiers` JSON, `identifiers` not an array, missing `file` or `identifiers` field |
+| 409    | Multiple configured patterns matched the supplied identifiers  |
+| 413    | Uploaded file exceeds `MAX_UPLOAD_BYTES`                        |
+| 415    | Uploaded file does not begin with the PDF magic header (`%PDF-`) |
+| 422    | No configured pattern matched, or `qpdf` could not decrypt the PDF (e.g. wrong password) |
+| 500    | Configuration could not be read/parsed, or another internal failure |
+| 504    | `qpdf` did not finish within `QPDF_TIMEOUT_SECONDS`             |
+
+Raw `qpdf` stderr output is never returned to the caller. It may be logged
+at debug level for operator troubleshooting, but passwords, full
+configuration contents, PDF content, and raw multipart bodies are never
+logged.
+
+## Environment variables
+
+| Variable               | Default                 | Description                                            |
+|-------------------------|--------------------------|----------------------------------------------------------|
+| `LISTEN_ADDR`           | `:8080`                 | HTTP listen address                                      |
+| `CONFIG_PATH`           | `/config/patterns.json` | Path to the pattern configuration file                   |
+| `MAX_UPLOAD_BYTES`      | `10485760` (10 MiB)     | Maximum accepted PDF upload size                          |
+| `QPDF_TIMEOUT_SECONDS`  | `30`                    | Timeout for a single `qpdf` invocation                    |
+| `QPDF_BIN`              | `qpdf`                  | Path/name of the `qpdf` binary to invoke                  |
 
 ## Local build
 
@@ -90,17 +171,6 @@ CONFIG_PATH=/tmp/decryptor-config/patterns.json \
 
 The server listens on `:8080` by default.
 
-## CI / releases
-
-- `.github/workflows/ci.yml` runs on every push/PR to `main`/`master`: `gofmt`
-  check, `go vet`, `go build`, `go test -race` (with `qpdf` installed so the
-  integration tests run), and a Docker image build (not pushed).
-- `.github/workflows/release.yml` builds and pushes a multi-arch
-  (`linux/amd64`, `linux/arm64`) image to GHCR
-  (`ghcr.io/<owner>/<repo>`) whenever a `vX.Y.Z` tag is pushed or a GitHub
-  Release is published. It authenticates with the built-in `GITHUB_TOKEN`
-  — no additional registry secrets need to be configured.
-
 ## Local Docker run
 
 Build the image:
@@ -117,59 +187,6 @@ docker run --rm -p 8080:8080 \
   document-decryptor:latest
 ```
 
-## `patterns.json` format
-
-```json
-{
-  "payslip": {
-    "name": "company-payslip",
-    "password": "PASSWORD_A"
-  },
-  "statements@example-bank.com": {
-    "name": "example-bank-account",
-    "password": "PASSWORD_B"
-  },
-  "credit card statement": {
-    "name": "example-bank-credit-card",
-    "password": "PASSWORD_C"
-  }
-}
-```
-
-- The top-level JSON object maps a **matching substring** to a profile.
-- `name` is an opaque label returned in the `X-Document-Profile` response
-  header and used in logs — it never contains the password.
-- `password` is the qpdf password used when this pattern is the single
-  match.
-- The `Profile` Go struct only has `name` and `password` today but is
-  designed so additional metadata fields can be added later without
-  changing matching or decryption logic.
-
-Matching is a case-insensitive substring search of each pattern against
-every supplied identifier (email address, subject line, filename, etc.).
-There is no regex or fuzzy matching. Exactly one pattern must match; zero or
-multiple matches are treated as errors (see below).
-
-## `curl` example
-
-```bash
-curl \
-  -F 'identifiers=["statements@example-bank.com","August 2026 Credit Card Statement","statement-202608.pdf"]' \
-  -F 'file=@encrypted.pdf;type=application/pdf' \
-  http://localhost:8080/decrypt \
-  -o decrypted.pdf
-```
-
-## Environment variables
-
-| Variable               | Default                 | Description                                            |
-|-------------------------|--------------------------|----------------------------------------------------------|
-| `LISTEN_ADDR`           | `:8080`                 | HTTP listen address                                      |
-| `CONFIG_PATH`           | `/config/patterns.json` | Path to the pattern configuration file                   |
-| `MAX_UPLOAD_BYTES`      | `10485760` (10 MiB)     | Maximum accepted PDF upload size                          |
-| `QPDF_TIMEOUT_SECONDS`  | `30`                    | Timeout for a single `qpdf` invocation                    |
-| `QPDF_BIN`              | `qpdf`                  | Path/name of the `qpdf` binary to invoke                  |
-
 ## Kubernetes deployment
 
 Example manifests are provided in `k8s/`:
@@ -180,8 +197,8 @@ Example manifests are provided in `k8s/`:
   `runAsNonRoot`, `allowPrivilegeEscalation: false`, all capabilities
   dropped, a read-only root filesystem, and `automountServiceAccountToken:
   false`
-- `k8s/service.yaml` — `ClusterIP` Service (no Ingress; this service is only
-  intended to be called from inside the cluster, e.g. by n8n)
+- `k8s/service.yaml` — `ClusterIP` Service (no Ingress; the service is only
+  intended to be reachable from inside the cluster)
 
 Apply with real secret values filled in:
 
@@ -195,46 +212,22 @@ To roll out an updated `patterns.json`, update the Secret and let the
 kubelet sync the mounted volume — no pod restart is required, since
 configuration is re-read from disk on every `/decrypt` request.
 
-## Expected n8n request format
+## CI / releases
 
-n8n's HTTP Request node should issue a `multipart/form-data POST` to
-`http://document-decryptor.<namespace>.svc.cluster.local:8080/decrypt`
-with two parts:
-
-- `identifiers` — a JSON-encoded array of strings (sender address, subject,
-  filename, or any other useful identifying text)
-- `file` — the encrypted PDF binary
-
-On success it receives the decrypted PDF back as the response body
-(`Content-Type: application/pdf`), along with `X-Document-Profile` and
-`X-Matched-Pattern` headers describing which configuration entry was used.
-
-## Error responses
-
-All errors are returned as JSON: `{"error": "...", "details": [...]}`
-(`details` is omitted when not applicable — e.g. it lists the matched
-pattern names on a `409`).
-
-| Status | Meaning                                                       |
-|--------|----------------------------------------------------------------|
-| 400    | Malformed request: invalid/malformed `identifiers` JSON, `identifiers` not an array, missing `file` or `identifiers` field |
-| 409    | Multiple configured patterns matched the supplied identifiers  |
-| 413    | Uploaded file exceeds `MAX_UPLOAD_BYTES`                        |
-| 415    | Uploaded file does not begin with the PDF magic header (`%PDF-`) |
-| 422    | No configured pattern matched, or `qpdf` could not decrypt the PDF (e.g. wrong password) |
-| 500    | Configuration could not be read/parsed, or another internal failure |
-| 504    | `qpdf` did not finish within `QPDF_TIMEOUT_SECONDS`             |
-
-Raw `qpdf` stderr output is never returned to the caller. It may be logged
-at debug level for operator troubleshooting, but passwords, full
-configuration contents, PDF content, and raw multipart bodies are never
-logged.
+- `.github/workflows/ci.yml` runs on every push/PR to `main`/`master`: `gofmt`
+  check, `go vet`, `go build`, `go test -race` (with `qpdf` installed so the
+  integration tests run), and a Docker image build (not pushed).
+- `.github/workflows/release.yml` builds and pushes a multi-arch
+  (`linux/amd64`, `linux/arm64`) image to GHCR
+  (`ghcr.io/<owner>/<repo>`) whenever a `vX.Y.Z` tag is pushed or a GitHub
+  Release is published. It authenticates with the built-in `GITHUB_TOKEN`
+  — no additional registry secrets need to be configured.
 
 ## Security assumptions
 
 - The service has **no authentication** of its own. It is expected to run
-  behind Kubernetes network policy / cluster-internal access only, called
-  solely by n8n. It is deliberately **not** exposed via an Ingress.
+  behind cluster-internal network access only, and is deliberately **not**
+  exposed via an Ingress.
 - `patterns.json` is expected to be mounted read-only from a Kubernetes
   Secret. The application does not manage, rotate, or expose credentials;
   it only reads them from a normal filesystem path.
