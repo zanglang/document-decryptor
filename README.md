@@ -90,6 +90,17 @@ CONFIG_PATH=/tmp/decryptor-config/patterns.json \
 
 The server listens on `:8080` by default.
 
+## CI / releases
+
+- `.github/workflows/ci.yml` runs on every push/PR to `main`/`master`: `gofmt`
+  check, `go vet`, `go build`, `go test -race` (with `qpdf` installed so the
+  integration tests run), and a Docker image build (not pushed).
+- `.github/workflows/release.yml` builds and pushes a multi-arch
+  (`linux/amd64`, `linux/arm64`) image to GHCR
+  (`ghcr.io/<owner>/<repo>`) whenever a `vX.Y.Z` tag is pushed or a GitHub
+  Release is published. It authenticates with the built-in `GITHUB_TOKEN`
+  — no additional registry secrets need to be configured.
+
 ## Local Docker run
 
 Build the image:
