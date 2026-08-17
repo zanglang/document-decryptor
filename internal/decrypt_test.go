@@ -40,19 +40,17 @@ func TestQPDFDecryptor_Integration(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	plain := filepath.Join(dir, "plain.pdf")
 	encrypted := filepath.Join(dir, "encrypted.pdf")
 	decrypted := filepath.Join(dir, "decrypted.pdf")
 
-	minimalPDF := "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF"
-	if err := os.WriteFile(plain, []byte(minimalPDF), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
+	// "--empty" is qpdf's built-in pseudo-input for a minimal, well-formed,
+	// zero-page PDF. Using it (rather than a hand-written PDF) guarantees
+	// the fixture itself is valid and encryption won't emit reconstruction
+	// warnings unrelated to what this test is actually exercising.
 	const password = "integration-test-password"
 	encryptCmd := exec.Command(qpdfPath,
 		"--encrypt", password, password, "256",
-		"--", plain, encrypted,
+		"--", "--empty", encrypted,
 	)
 	if out, err := encryptCmd.CombinedOutput(); err != nil {
 		t.Fatalf("failed to prepare encrypted fixture: %v\n%s", err, out)
@@ -79,18 +77,12 @@ func TestQPDFDecryptor_WrongPassword(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	plain := filepath.Join(dir, "plain.pdf")
 	encrypted := filepath.Join(dir, "encrypted.pdf")
 	decrypted := filepath.Join(dir, "decrypted.pdf")
 
-	minimalPDF := "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF"
-	if err := os.WriteFile(plain, []byte(minimalPDF), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
 	encryptCmd := exec.Command(qpdfPath,
 		"--encrypt", "correct-password", "correct-password", "256",
-		"--", plain, encrypted,
+		"--", "--empty", encrypted,
 	)
 	if out, err := encryptCmd.CombinedOutput(); err != nil {
 		t.Fatalf("failed to prepare encrypted fixture: %v\n%s", err, out)
