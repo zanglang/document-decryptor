@@ -1,0 +1,6 @@
+.git
+.gitignore
+*.md
+example/
+k8s/
+*.pdf

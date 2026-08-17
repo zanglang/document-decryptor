@@ -1,0 +1,14 @@
+{
+  "payslip": {
+    "name": "company-payslip",
+    "password": "PASSWORD_A"
+  },
+  "statements@example-bank.com": {
+    "name": "example-bank-account",
+    "password": "PASSWORD_B"
+  },
+  "credit card statement": {
+    "name": "example-bank-credit-card",
+    "password": "PASSWORD_C"
+  }
+}

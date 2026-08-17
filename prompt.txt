@@ -1,0 +1,680 @@
+# Codex Prompt Ñ Document Decryptor Service
+
+Implement a small production-ready HTTP service named `document-decryptor`.
+
+The service will run in Kubernetes and be called by n8n. Its sole purpose is to accept an encrypted PDF plus a list of identifying strings, select the correct password based on configured substring matches, decrypt the PDF using `qpdf`, and return the decrypted PDF.
+
+Use **Go**.
+
+## Goals
+
+Build a minimal service with:
+
+- a single HTTP API for PDF decryption
+- a JSON configuration file containing match patterns and passwords
+- simple case-insensitive substring matching
+- `qpdf` for PDF decryption
+- configuration loaded from a mounted file, suitable for a Kubernetes Secret
+- no database
+- no external API calls
+- no Gmail or Google Drive integration
+- no unnecessary frameworks or infrastructure
+
+n8n will handle email retrieval, attachment download, Google Drive upload, and workflow orchestration.
+
+The decryptor should remain narrowly scoped.
+
+## API
+
+Expose:
+
+```text
+GET /healthz
+```
+
+Response:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+Expose:
+
+```text
+POST /decrypt
+Content-Type: multipart/form-data
+```
+
+The request must contain:
+
+```text
+identifiers
+```
+
+A JSON-encoded array of arbitrary strings, for example:
+
+```json
+[
+  "statements@example-bank.com",
+  "August 2026 Credit Card Statement",
+  "statement-202608.pdf"
+]
+```
+
+and:
+
+```text
+file
+```
+
+The encrypted PDF uploaded as multipart binary data.
+
+Example request:
+
+```bash
+curl \
+  -F 'identifiers=["statements@example-bank.com","August Credit Card Statement","statement.pdf"]' \
+  -F 'file=@encrypted.pdf;type=application/pdf' \
+  http://localhost:8080/decrypt \
+  -o decrypted.pdf
+```
+
+## Pattern Configuration
+
+Load configuration from:
+
+```text
+/config/patterns.json
+```
+
+Allow the path to be overridden with:
+
+```text
+CONFIG_PATH
+```
+
+Example configuration:
+
+```json
+{
+  "payslip": {
+    "name": "company-payslip",
+    "password": "PASSWORD_A"
+  },
+  "statements@example-bank.com": {
+    "name": "example-bank-account",
+    "password": "PASSWORD_B"
+  },
+  "credit card statement": {
+    "name": "example-bank-credit-card",
+    "password": "PASSWORD_C"
+  }
+}
+```
+
+The top-level JSON object maps:
+
+```text
+matching substring ? configuration
+```
+
+Each entry currently contains:
+
+```text
+name
+password
+```
+
+Design the Go structs so additional metadata fields can easily be added later.
+
+## Matching Behavior
+
+Matching is intentionally simple.
+
+For each configured pattern, perform a **case-insensitive substring search** against every supplied identifier.
+
+For example:
+
+```text
+pattern: "payslip"
+
+identifiers:
+- "myself@example.com"
+- "Monthly Payslip August 2026"
+- "Payroll_202608.pdf"
+```
+
+must match.
+
+Another example:
+
+```text
+pattern: "example-bank.com"
+
+identifier:
+"estatements@example-bank.com"
+```
+
+must match.
+
+Use Unicode-safe case normalization where reasonably practical.
+
+Exactly one configured pattern must match.
+
+If zero patterns match:
+
+```text
+HTTP 422
+```
+
+with an appropriate JSON error response.
+
+If multiple different configured patterns match:
+
+```text
+HTTP 409
+```
+
+with an error response indicating which patterns matched.
+
+Do not silently choose the first match.
+
+Do not try multiple passwords.
+
+## Config Reloading
+
+The configuration should be re-read from disk for each `/decrypt` request.
+
+This is intentional.
+
+The expected configuration contains approximately 10 entries, so performance is irrelevant.
+
+This allows a Kubernetes Secret-backed volume to be updated without requiring an application restart.
+
+If the config cannot be read or parsed, fail the request cleanly and log the error.
+
+Never include configured passwords in logs or HTTP error responses.
+
+## PDF Processing
+
+After selecting exactly one pattern:
+
+1. create a unique temporary working directory
+2. save the uploaded PDF as an input file
+3. perform a basic sanity check that the input begins with the PDF magic header:
+   ```text
+   %PDF-
+   ```
+4. invoke `qpdf`
+5. write the decrypted output into the temporary directory
+6. verify that the output exists and is non-empty
+7. stream the resulting PDF back to the client
+8. remove the temporary directory afterward, including on errors where possible
+
+Use `os/exec` to invoke `qpdf`.
+
+Equivalent command:
+
+```bash
+qpdf \
+  --password=<selected-password> \
+  --decrypt \
+  input.pdf \
+  output.pdf
+```
+
+Avoid invoking a shell such as:
+
+```text
+sh -c
+bash -c
+```
+
+Call the binary directly with argument separation via `exec.CommandContext`.
+
+Apply a timeout to the `qpdf` operation, defaulting to approximately 30 seconds.
+
+Make the timeout configurable through an environment variable such as:
+
+```text
+QPDF_TIMEOUT_SECONDS
+```
+
+## File Limits
+
+Prevent arbitrary large uploads.
+
+Default maximum PDF size:
+
+```text
+10 MiB
+```
+
+Make it configurable with an environment variable.
+
+Reject oversized requests with:
+
+```text
+HTTP 413
+```
+
+Do not load the entire PDF into memory if avoidable.
+
+Stream the incoming upload to disk while enforcing the size limit.
+
+## Response
+
+On successful decryption:
+
+```text
+HTTP 200
+Content-Type: application/pdf
+```
+
+Preserve the incoming filename where reasonable.
+
+Also return:
+
+```text
+X-Document-Profile: <configured name>
+X-Matched-Pattern: <matched substring>
+```
+
+Example:
+
+```text
+X-Document-Profile: example-bank-credit-card
+X-Matched-Pattern: credit card statement
+```
+
+Do not return the password.
+
+## Error Behavior
+
+Use JSON error responses.
+
+Suggested behavior:
+
+```text
+400
+invalid request / malformed identifiers JSON
+
+409
+multiple matching patterns
+
+413
+uploaded file too large
+
+415
+uploaded file is clearly not a PDF
+
+422
+no matching pattern
+or
+qpdf could not decrypt the PDF
+
+500
+configuration/internal failure
+
+504
+qpdf timeout
+```
+
+Do not return raw `qpdf` stderr to the caller.
+
+It may be logged at an appropriate level, but ensure nothing sensitive is accidentally logged.
+
+## Logging
+
+Use Go's standard structured logging facilities if practical.
+
+At minimum log:
+
+```text
+request received
+filename
+matched profile name
+matched pattern
+success/failure
+processing duration
+```
+
+Never log:
+
+```text
+password
+full configuration contents
+PDF content
+multipart body
+```
+
+Avoid logging full identifier lists unless necessary.
+
+## HTTP Server
+
+Use Go's standard library where reasonable:
+
+```text
+net/http
+encoding/json
+os/exec
+context
+```
+
+Avoid a web framework unless there is a strong reason to introduce one.
+
+Listen on:
+
+```text
+:8080
+```
+
+Allow overriding through:
+
+```text
+LISTEN_ADDR
+```
+
+Implement sensible HTTP server timeouts:
+
+```text
+ReadHeaderTimeout
+ReadTimeout
+WriteTimeout
+IdleTimeout
+```
+
+Handle graceful shutdown on:
+
+```text
+SIGINT
+SIGTERM
+```
+
+## Project Structure
+
+Use a simple maintainable structure such as:
+
+```text
+document-decryptor/
+??? cmd/
+?   ??? decryptor/
+?       ??? main.go
+??? internal/
+?   ??? config.go
+?   ??? matcher.go
+?   ??? decrypt.go
+?   ??? handler.go
+??? go.mod
+??? go.sum
+??? Dockerfile
+??? .dockerignore
+??? README.md
+??? example/
+    ??? patterns.json
+```
+
+Do not over-engineer the package hierarchy if a simpler arrangement is clearer.
+
+## Tests
+
+Add unit tests for at least:
+
+### Matching
+
+- exact substring match
+- case-insensitive match
+- substring within a longer email address
+- substring within subject
+- substring within filename
+- Unicode identifier handling
+- zero matches
+- multiple matches
+
+### Config
+
+- valid config
+- malformed JSON
+- missing file
+
+### HTTP validation
+
+Where practical:
+
+- malformed identifiers JSON
+- identifiers not being an array
+- missing PDF
+- oversized upload
+- non-PDF upload
+- no matching pattern
+
+For `qpdf` integration tests, either:
+
+- conditionally run when `qpdf` is available, or
+- separate process execution behind a small interface so it can be mocked in HTTP unit tests
+
+Keep the design straightforward.
+
+## Docker Image
+
+Use a multi-stage Docker build.
+
+Build the Go binary statically where possible.
+
+Example direction:
+
+```dockerfile
+FROM golang:<current-stable>-alpine AS build
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/document-decryptor \
+    ./cmd/decryptor
+```
+
+Runtime image should contain:
+
+```text
+Alpine
+qpdf
+ca-certificates
+the Go binary
+```
+
+Run as a non-root user.
+
+Do not include Go tooling or source files in the runtime image.
+
+## Kubernetes Compatibility
+
+The container must work cleanly with:
+
+```text
+/config/patterns.json
+```
+
+provided via a Kubernetes Secret volume.
+
+Example intended mount:
+
+```yaml
+volumeMounts:
+  - name: decryptor-config
+    mountPath: /config
+    readOnly: true
+```
+
+with:
+
+```yaml
+volumes:
+  - name: decryptor-config
+    secret:
+      secretName: document-decryptor-config
+```
+
+An eventual Secret may look like:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: document-decryptor-config
+type: Opaque
+stringData:
+  patterns.json: |
+    {
+      "payslip": {
+        "name": "company-payslip",
+        "password": "..."
+      },
+      "example-bank.com": {
+        "name": "example-bank",
+        "password": "..."
+      }
+    }
+```
+
+Do not hardcode Kubernetes-specific logic into the application. It should simply read a normal filesystem path.
+
+## Kubernetes Manifests
+
+Also provide example manifests for:
+
+```text
+Deployment
+Service
+Secret example with placeholder values
+```
+
+Use:
+
+```text
+replicas: 1
+ClusterIP Service
+automountServiceAccountToken: false
+```
+
+Apply reasonable:
+
+```text
+resource requests/limits
+readiness probe ? /healthz
+liveness probe ? /healthz
+runAsNonRoot
+allowPrivilegeEscalation: false
+drop all Linux capabilities
+```
+
+Do not expose the service through an Ingress.
+
+It is intended to be called only inside the cluster by n8n.
+
+## README
+
+Document:
+
+- purpose
+- architecture
+- local build
+- local Docker run
+- expected `patterns.json` format
+- `curl` example
+- environment variables
+- Kubernetes deployment
+- expected n8n request format
+- error responses
+- security assumptions
+
+Include a simple flow diagram such as:
+
+```text
+Gmail
+  ?
+n8n
+  ?
+POST PDF + identifiers
+  ?
+document-decryptor
+  ?? load patterns.json
+  ?? identify exactly one profile
+  ?? run qpdf
+  ?? return decrypted PDF
+  ?
+n8n
+  ?
+Google Drive
+```
+
+## Scope Restrictions
+
+Do not implement:
+
+- Gmail integration
+- Google Drive integration
+- credential management systems
+- databases
+- OAuth
+- authentication
+- web UI
+- regex matching
+- fuzzy matching
+- PDF classification using AI
+- OCR
+- Kubernetes Job creation
+- queues
+- persistence
+- retry queues
+- arbitrary command execution
+- APIs for viewing or editing passwords
+
+Keep this a very small deterministic internal service.
+
+## Acceptance Criteria
+
+I should be able to:
+
+1. create `patterns.json`:
+
+```json
+{
+  "payslip": {
+    "name": "payslip",
+    "password": "testpassword"
+  }
+}
+```
+
+2. run the service
+
+3. call:
+
+```bash
+curl \
+  -F 'identifiers=["Monthly Payslip","foo.pdf"]' \
+  -F 'file=@encrypted.pdf' \
+  http://localhost:8080/decrypt \
+  -o decrypted.pdf
+```
+
+4. successfully open `decrypted.pdf` without a password
+
+5. modify `patterns.json` while the process remains running
+
+6. have the next request immediately use the updated configuration
+
+7. receive a clear error if zero or multiple patterns match
+
+8. build a small runtime container containing only the Go binary and required runtime packages
+
+Implement the service completely, run the unit tests, build the Docker image if Docker is available, and report any assumptions or deviations from this specification.
