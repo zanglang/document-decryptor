@@ -118,7 +118,10 @@ curl \
   profile — e.g. sender addresses, subject-line snippets, filename
   fragments. Any one of them matching is enough to select the profile.
 - `password` is the qpdf password used when this profile is the single
-  match.
+  match. It may be `""` (or omitted) — some PDFs are encrypted with an
+  empty user password and a separate owner password, so they open with no
+  prompt in most viewers but still carry an encryption dictionary that
+  needs an explicit (empty) password passed to qpdf.
 - The `Profile` Go struct only has `patterns` and `password` today but is
   designed so additional metadata fields can be added later without
   changing matching or decryption logic.

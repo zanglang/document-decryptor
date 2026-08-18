@@ -64,7 +64,11 @@ func TestLoadConfig_EmptyObject(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_MissingPassword(t *testing.T) {
+// TestLoadConfig_EmptyPasswordAllowed verifies that an explicitly empty (or
+// entirely omitted) password is accepted, not rejected: some PDFs are
+// encrypted with an empty user password, and qpdf needs to be told that
+// explicitly rather than have the service refuse to load the profile.
+func TestLoadConfig_EmptyPasswordAllowed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "patterns.json")
 	content := `{"company-payslip": {"patterns": ["payslip"]}}`
@@ -72,8 +76,12 @@ func TestLoadConfig_MissingPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := LoadConfig(path); err == nil {
-		t.Fatal("expected error for missing password, got nil")
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg["company-payslip"].Password; got != "" {
+		t.Fatalf("expected empty password, got %q", got)
 	}
 }
 

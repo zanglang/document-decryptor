@@ -10,6 +10,11 @@ import (
 // case-insensitive substrings that identify it, and the password used to
 // decrypt matching PDFs.
 //
+// Password may legitimately be "": some PDFs (e.g. bank e-statements) are
+// encrypted with an empty user password and a separate owner password, so
+// they open without a prompt in most viewers but still carry an encryption
+// dictionary qpdf must be given a (possibly empty) password to process.
+//
 // The struct is intentionally small so additional metadata (e.g. an owner,
 // a description, a retention policy) can be added later without touching
 // matching or decryption logic.
@@ -53,9 +58,6 @@ func LoadConfig(path string) (PatternConfig, error) {
 			if pattern == "" {
 				return nil, fmt.Errorf("profile %q has an empty pattern", name)
 			}
-		}
-		if profile.Password == "" {
-			return nil, fmt.Errorf("profile %q has an empty password", name)
 		}
 	}
 
