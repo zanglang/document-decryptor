@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 go build \
     -o /out/document-decryptor \
     ./cmd/decryptor
 
-FROM alpine:3.20
+FROM alpine:3.22
 
 RUN apk add --no-cache qpdf ca-certificates \
     && addgroup -S decryptor \
