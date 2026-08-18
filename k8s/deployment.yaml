@@ -17,6 +17,12 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        # The image's USER is a named account, not a numeric UID; the
+        # kubelet can't verify a named user is non-root without an
+        # explicit runAsUser. Must match the "decryptor" uid/gid created
+        # in the Dockerfile (`adduser`/`addgroup` defaults on Alpine).
+        runAsUser: 100
+        runAsGroup: 101
       containers:
         - name: document-decryptor
           image: document-decryptor:latest
@@ -54,6 +60,8 @@ spec:
               memory: 256Mi
           securityContext:
             runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 101
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
