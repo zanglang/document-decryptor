@@ -95,6 +95,49 @@ func TestQPDFDecryptor_WrongPassword(t *testing.T) {
 	}
 }
 
+func TestQPDFDecryptor_IsEncrypted(t *testing.T) {
+	qpdfPath, err := exec.LookPath("qpdf")
+	if err != nil {
+		t.Skip("qpdf not available on PATH, skipping integration test")
+	}
+
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "plain.pdf")
+	encrypted := filepath.Join(dir, "encrypted.pdf")
+
+	emptyCmd := exec.Command(qpdfPath, "--empty", plain)
+	if out, err := emptyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to prepare plain fixture: %v\n%s", err, out)
+	}
+
+	const password = "is-encrypted-test-password"
+	encryptCmd := exec.Command(qpdfPath,
+		"--encrypt", password, password, "256",
+		"--", "--empty", encrypted,
+	)
+	if out, err := encryptCmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to prepare encrypted fixture: %v\n%s", err, out)
+	}
+
+	dec := &QPDFDecryptor{Timeout: 10 * time.Second}
+
+	got, err := dec.IsEncrypted(context.Background(), plain)
+	if err != nil {
+		t.Fatalf("IsEncrypted(plain) error = %v", err)
+	}
+	if got {
+		t.Fatal("expected plain PDF to report as not encrypted")
+	}
+
+	got, err = dec.IsEncrypted(context.Background(), encrypted)
+	if err != nil {
+		t.Fatalf("IsEncrypted(encrypted) error = %v", err)
+	}
+	if !got {
+		t.Fatal("expected encrypted PDF to report as encrypted")
+	}
+}
+
 func TestQPDFDecryptor_Timeout(t *testing.T) {
 	// Use a fake "qpdf" binary that sleeps, to deterministically exercise
 	// the timeout path without depending on real qpdf's speed.

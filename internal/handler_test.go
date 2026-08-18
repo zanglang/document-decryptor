@@ -20,6 +20,12 @@ import (
 type fakeDecryptor struct {
 	err        error
 	outputData []byte
+
+	// unencrypted, when true, makes IsEncrypted report the input as already
+	// decrypted (the zero value keeps existing tests on the normal
+	// match-and-decrypt path).
+	unencrypted    bool
+	isEncryptedErr error
 }
 
 func (f *fakeDecryptor) Decrypt(ctx context.Context, inputPath, outputPath, password string) error {
@@ -31,6 +37,13 @@ func (f *fakeDecryptor) Decrypt(ctx context.Context, inputPath, outputPath, pass
 		data = []byte("%PDF-1.4\ndecrypted content")
 	}
 	return os.WriteFile(outputPath, data, 0o600)
+}
+
+func (f *fakeDecryptor) IsEncrypted(ctx context.Context, path string) (bool, error) {
+	if f.isEncryptedErr != nil {
+		return false, f.isEncryptedErr
+	}
+	return !f.unencrypted, nil
 }
 
 func discardLogger() *slog.Logger {
@@ -198,8 +211,8 @@ func TestDecrypt_NoMatchingPattern(t *testing.T) {
 	body, ct := buildMultipart(t, validIdentifiers(t, []string{"totally unrelated invoice"}), "input.pdf", validPDFBytes)
 	rec := doDecryptRequest(t, srv, body, ct)
 
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -245,6 +258,48 @@ func TestDecrypt_Success(t *testing.T) {
 	// The configured password must never appear in the response.
 	if bytes.Contains(rec.Body.Bytes(), []byte("secret-a")) {
 		t.Fatal("password leaked in response body")
+	}
+}
+
+func TestDecrypt_EchoUnencryptedPDF(t *testing.T) {
+	srv := newTestServer(t, &fakeDecryptor{unencrypted: true})
+	// No identifier here matches any configured profile, proving matching
+	// was skipped entirely for an already-unencrypted upload.
+	body, ct := buildMultipart(t, validIdentifiers(t, []string{"totally unrelated invoice"}), "myfile.pdf", validPDFBytes)
+	rec := doDecryptRequest(t, srv, body, ct)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if enc := rec.Header().Get("X-Document-Encrypted"); enc != "false" {
+		t.Fatalf("expected X-Document-Encrypted: false, got %q", enc)
+	}
+	if rec.Header().Get("X-Document-Profile") != "" || rec.Header().Get("X-Matched-Pattern") != "" {
+		t.Fatalf("expected no profile/pattern headers in echo mode, got profile=%q pattern=%q",
+			rec.Header().Get("X-Document-Profile"), rec.Header().Get("X-Matched-Pattern"))
+	}
+	if !bytes.Equal(rec.Body.Bytes(), validPDFBytes) {
+		t.Fatalf("expected the original upload to be echoed back unchanged, got %q", rec.Body.String())
+	}
+}
+
+func TestDecrypt_EncryptionCheckFailure(t *testing.T) {
+	srv := newTestServer(t, &fakeDecryptor{isEncryptedErr: ErrDecryptFailed})
+	body, ct := buildMultipart(t, validIdentifiers(t, []string{"payslip"}), "input.pdf", validPDFBytes)
+	rec := doDecryptRequest(t, srv, body, ct)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDecrypt_EncryptionCheckTimeout(t *testing.T) {
+	srv := newTestServer(t, &fakeDecryptor{isEncryptedErr: ErrDecryptTimeout})
+	body, ct := buildMultipart(t, validIdentifiers(t, []string{"payslip"}), "input.pdf", validPDFBytes)
+	rec := doDecryptRequest(t, srv, body, ct)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("expected 504, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

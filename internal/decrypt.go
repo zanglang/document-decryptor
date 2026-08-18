@@ -36,6 +36,8 @@ func LooksLikePDF(header []byte) bool {
 // without invoking the real qpdf binary.
 type Decryptor interface {
 	Decrypt(ctx context.Context, inputPath, outputPath, password string) error
+	// IsEncrypted reports whether the PDF at path is password-protected.
+	IsEncrypted(ctx context.Context, path string) (bool, error)
 }
 
 // QPDFDecryptor decrypts PDFs by invoking the qpdf binary directly (never
@@ -119,4 +121,43 @@ func (q *QPDFDecryptor) Decrypt(ctx context.Context, inputPath, outputPath, pass
 	}
 
 	return nil
+}
+
+// IsEncrypted reports whether the PDF at path is password-protected, via:
+//
+//	qpdf --is-encrypted <path>
+//
+// qpdf exits 0 if the file is encrypted, 2 if it is not (or if it can't be
+// read at all, e.g. it's damaged). Since callers only invoke this after
+// LooksLikePDF has already confirmed the file starts with the PDF magic
+// header, an exit code of 2 is treated as "not encrypted" rather than as an
+// error.
+func (q *QPDFDecryptor) IsEncrypted(ctx context.Context, path string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, q.timeout())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, q.binPath(), "--is-encrypted", path)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	if ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return false, ErrDecryptTimeout
+	}
+
+	if err == nil {
+		return true, nil
+	}
+
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
+		return false, nil
+	}
+
+	if q.Logger != nil {
+		q.Logger.Debug("qpdf --is-encrypted invocation failed", "error", err, "stderr", stderr.String())
+	}
+	return false, fmt.Errorf("%w", ErrDecryptFailed)
 }

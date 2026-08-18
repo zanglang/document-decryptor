@@ -224,6 +224,46 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	encrypted, err := s.Decryptor.IsEncrypted(r.Context(), inputPath)
+	switch {
+	case errors.Is(err, ErrDecryptTimeout):
+		logger.Error("request finished", "filename", filename, "result", "encryption check timeout", "duration_ms", time.Since(start).Milliseconds())
+		writeError(w, http.StatusGatewayTimeout, "checking PDF encryption status timed out")
+		return
+	case err != nil:
+		logger.Error("request finished", "filename", filename, "result", "encryption check failed", "duration_ms", time.Since(start).Milliseconds())
+		writeError(w, http.StatusUnprocessableEntity, "unable to inspect uploaded PDF")
+		return
+	}
+
+	if !encrypted {
+		// Already-decrypted input: skip pattern matching entirely and echo
+		// the uploaded PDF straight back.
+		info, statErr := os.Stat(inputPath)
+		if statErr != nil {
+			logger.Error("failed to stat input file", "error", statErr)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		out, openErr := os.Open(inputPath)
+		if openErr != nil {
+			logger.Error("failed to reopen input file", "error", openErr)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		defer out.Close()
+
+		w.Header().Set("Content-Type", "application/pdf")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+		w.Header().Set("X-Document-Encrypted", "false")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+		w.WriteHeader(http.StatusOK)
+		io.Copy(w, out)
+
+		logger.Info("request finished", "filename", filename, "result", "echo (already unencrypted)", "duration_ms", time.Since(start).Milliseconds())
+		return
+	}
+
 	cfg, err := s.LoadConfig(s.ConfigPath)
 	if err != nil {
 		// Never leak config contents or filesystem details to the caller.
@@ -236,7 +276,7 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case len(matches) == 0:
 		logger.Info("request finished", "filename", filename, "result", "no match", "duration_ms", time.Since(start).Milliseconds())
-		writeError(w, http.StatusUnprocessableEntity, "no configured profile matched the supplied identifiers")
+		writeError(w, http.StatusNotFound, "no configured profile matched the supplied identifiers")
 		return
 	case len(matches) > 1:
 		profiles := make([]string, len(matches))
@@ -281,6 +321,7 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/pdf")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.Header().Set("X-Document-Encrypted", "true")
 	w.Header().Set("X-Document-Profile", match.ProfileName)
 	w.Header().Set("X-Matched-Pattern", match.Pattern)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))

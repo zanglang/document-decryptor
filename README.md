@@ -10,10 +10,13 @@ the PDF with `qpdf`, and streams the result back.
 Given an encrypted PDF and a list of "identifying strings" (e.g. sender
 email, email subject, filename), the service:
 
-1. matches the identifiers against a small set of configured substrings
-2. picks the password for the single matching entry
-3. decrypts the PDF with `qpdf`
-4. streams the decrypted PDF back
+1. checks whether the uploaded PDF is actually encrypted; if it isn't, it's
+   streamed straight back unmodified (see [Echo mode](#echo-mode) below)
+2. otherwise, matches the identifiers against a small set of configured
+   substrings
+3. picks the password for the single matching entry
+4. decrypts the PDF with `qpdf`
+5. streams the decrypted PDF back
 
 There is no database, no authentication, no outbound network calls, and no
 retry logic. Configuration is a flat JSON file re-read on every request, so
@@ -58,12 +61,25 @@ Returns `200 OK` with:
 On success, returns `200 OK` with `Content-Type: application/pdf` and the
 decrypted PDF as the body, plus:
 
-- `X-Document-Profile` — the configured profile name that was used
+- `X-Document-Encrypted` — `true` if the upload was decrypted, `false` if it
+  was echoed back as-is (see [Echo mode](#echo-mode))
+- `X-Document-Profile` — the configured profile name that was used (omitted
+  in echo mode)
 - `X-Matched-Pattern` — the specific substring (from that profile's
-  `patterns` list) that matched
+  `patterns` list) that matched (omitted in echo mode)
 
 See [`patterns.json` format](#patternsjson-format) and [Error
 responses](#error-responses) below.
+
+### Echo mode
+
+Before doing any pattern matching, the service checks whether the uploaded
+PDF is actually encrypted (`qpdf --is-encrypted`). If it's already
+unencrypted, the service skips matching and decryption entirely and streams
+the upload straight back with `X-Document-Encrypted: false` — a noop
+pass-through for documents that don't need decrypting. `identifiers` is
+still required on the request (it's part of the multipart contract), but
+its contents are not used in this path.
 
 ## `curl` example
 
@@ -123,10 +139,11 @@ profile names on a `409`).
 | Status | Meaning                                                       |
 |--------|----------------------------------------------------------------|
 | 400    | Malformed request: invalid/malformed `identifiers` JSON, `identifiers` not an array, missing `file` or `identifiers` field |
+| 404    | No configured profile matched the supplied identifiers         |
 | 409    | Multiple configured profiles matched the supplied identifiers  |
 | 413    | Uploaded file exceeds `MAX_UPLOAD_BYTES`                        |
 | 415    | Uploaded file does not begin with the PDF magic header (`%PDF-`) |
-| 422    | No configured profile matched, or `qpdf` could not decrypt the PDF (e.g. wrong password) |
+| 422    | `qpdf` could not inspect or decrypt the PDF (e.g. wrong password, corrupted file) |
 | 500    | Configuration could not be read/parsed, or another internal failure |
 | 504    | `qpdf` did not finish within `QPDF_TIMEOUT_SECONDS`             |
 
