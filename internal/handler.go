@@ -236,15 +236,15 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case len(matches) == 0:
 		logger.Info("request finished", "filename", filename, "result", "no match", "duration_ms", time.Since(start).Milliseconds())
-		writeError(w, http.StatusUnprocessableEntity, "no configured pattern matched the supplied identifiers")
+		writeError(w, http.StatusUnprocessableEntity, "no configured profile matched the supplied identifiers")
 		return
 	case len(matches) > 1:
-		patterns := make([]string, len(matches))
+		profiles := make([]string, len(matches))
 		for i, m := range matches {
-			patterns[i] = m.Pattern
+			profiles[i] = m.ProfileName
 		}
-		logger.Warn("request finished", "filename", filename, "result", "multiple matches", "patterns", patterns, "duration_ms", time.Since(start).Milliseconds())
-		writeError(w, http.StatusConflict, "multiple configured patterns matched the supplied identifiers", patterns...)
+		logger.Warn("request finished", "filename", filename, "result", "multiple matches", "profiles", profiles, "duration_ms", time.Since(start).Milliseconds())
+		writeError(w, http.StatusConflict, "multiple configured profiles matched the supplied identifiers", profiles...)
 		return
 	}
 
@@ -255,18 +255,18 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 	duration := time.Since(start)
 	switch {
 	case errors.Is(err, ErrDecryptTimeout):
-		logger.Error("request finished", "filename", filename, "profile", match.Profile.Name, "pattern", match.Pattern, "result", "timeout", "duration_ms", duration.Milliseconds())
+		logger.Error("request finished", "filename", filename, "profile", match.ProfileName, "pattern", match.Pattern, "result", "timeout", "duration_ms", duration.Milliseconds())
 		writeError(w, http.StatusGatewayTimeout, "decryption timed out")
 		return
 	case err != nil:
-		logger.Error("request finished", "filename", filename, "profile", match.Profile.Name, "pattern", match.Pattern, "result", "decrypt failed", "duration_ms", duration.Milliseconds())
+		logger.Error("request finished", "filename", filename, "profile", match.ProfileName, "pattern", match.Pattern, "result", "decrypt failed", "duration_ms", duration.Milliseconds())
 		writeError(w, http.StatusUnprocessableEntity, "unable to decrypt PDF")
 		return
 	}
 
 	info, err := os.Stat(outputPath)
 	if err != nil || info.Size() == 0 {
-		logger.Error("request finished", "filename", filename, "profile", match.Profile.Name, "pattern", match.Pattern, "result", "empty output", "duration_ms", duration.Milliseconds())
+		logger.Error("request finished", "filename", filename, "profile", match.ProfileName, "pattern", match.Pattern, "result", "empty output", "duration_ms", duration.Milliseconds())
 		writeError(w, http.StatusUnprocessableEntity, "unable to decrypt PDF")
 		return
 	}
@@ -281,13 +281,13 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/pdf")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
-	w.Header().Set("X-Document-Profile", match.Profile.Name)
+	w.Header().Set("X-Document-Profile", match.ProfileName)
 	w.Header().Set("X-Matched-Pattern", match.Pattern)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, out)
 
-	logger.Info("request finished", "filename", filename, "profile", match.Profile.Name, "pattern", match.Pattern, "result", "success", "duration_ms", duration.Milliseconds())
+	logger.Info("request finished", "filename", filename, "profile", match.ProfileName, "pattern", match.Pattern, "result", "success", "duration_ms", duration.Milliseconds())
 }
 
 func isRequestTooLarge(err error) bool {

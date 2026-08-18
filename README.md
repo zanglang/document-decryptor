@@ -58,8 +58,9 @@ Returns `200 OK` with:
 On success, returns `200 OK` with `Content-Type: application/pdf` and the
 decrypted PDF as the body, plus:
 
-- `X-Document-Profile` — the configured profile `name` that was used
-- `X-Matched-Pattern` — the configured substring that matched
+- `X-Document-Profile` — the configured profile name that was used
+- `X-Matched-Pattern` — the specific substring (from that profile's
+  `patterns` list) that matched
 
 See [`patterns.json` format](#patternsjson-format) and [Error
 responses](#error-responses) below.
@@ -78,48 +79,54 @@ curl \
 
 ```json
 {
-  "payslip": {
-    "name": "company-payslip",
+  "company-payslip": {
+    "patterns": ["payslip"],
     "password": "PASSWORD_A"
   },
-  "statements@example-bank.com": {
-    "name": "example-bank-account",
+  "example-bank-account": {
+    "patterns": ["statements@example-bank.com"],
     "password": "PASSWORD_B"
   },
-  "credit card statement": {
-    "name": "example-bank-credit-card",
+  "example-bank-credit-card": {
+    "patterns": ["credit card statement", "statement-202608"],
     "password": "PASSWORD_C"
   }
 }
 ```
 
-- The top-level JSON object maps a **matching substring** to a profile.
-- `name` is an opaque label returned in the `X-Document-Profile` response
-  header and used in logs — it never contains the password.
-- `password` is the qpdf password used when this pattern is the single
+- The top-level JSON object maps a **profile name** to a profile
+  definition. The profile name is an opaque label returned in the
+  `X-Document-Profile` response header and used in logs — it never
+  contains the password.
+- `patterns` is a list of case-insensitive matching substrings for that
+  profile — e.g. sender addresses, subject-line snippets, filename
+  fragments. Any one of them matching is enough to select the profile.
+- `password` is the qpdf password used when this profile is the single
   match.
-- The `Profile` Go struct only has `name` and `password` today but is
+- The `Profile` Go struct only has `patterns` and `password` today but is
   designed so additional metadata fields can be added later without
   changing matching or decryption logic.
 
-Matching is a case-insensitive substring search of each pattern against
-every supplied identifier. There is no regex or fuzzy matching. Exactly one
-pattern must match; zero or multiple matches are treated as errors (see
-below).
+Matching is a case-insensitive substring search of each profile's patterns
+against every supplied identifier. There is no regex or fuzzy matching. A
+profile counts as matched if any of its patterns match; the response's
+`X-Matched-Pattern` reports the first pattern (in list order) that hit.
+Exactly one **profile** must match; zero or multiple matching profiles are
+treated as errors (see below).
 
 ## Error responses
 
 All errors are returned as JSON: `{"error": "...", "details": [...]}`
 (`details` is omitted when not applicable — e.g. it lists the matched
-pattern names on a `409`).
+profile names on a `409`).
 
 | Status | Meaning                                                       |
 |--------|----------------------------------------------------------------|
 | 400    | Malformed request: invalid/malformed `identifiers` JSON, `identifiers` not an array, missing `file` or `identifiers` field |
-| 409    | Multiple configured patterns matched the supplied identifiers  |
+| 409    | Multiple configured profiles matched the supplied identifiers  |
 | 413    | Uploaded file exceeds `MAX_UPLOAD_BYTES`                        |
 | 415    | Uploaded file does not begin with the PDF magic header (`%PDF-`) |
-| 422    | No configured pattern matched, or `qpdf` could not decrypt the PDF (e.g. wrong password) |
+| 422    | No configured profile matched, or `qpdf` could not decrypt the PDF (e.g. wrong password) |
 | 500    | Configuration could not be read/parsed, or another internal failure |
 | 504    | `qpdf` did not finish within `QPDF_TIMEOUT_SECONDS`             |
 

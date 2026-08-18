@@ -1,14 +1,14 @@
 {
-  "payslip": {
-    "name": "company-payslip",
+  "company-payslip": {
+    "patterns": ["payslip"],
     "password": "PASSWORD_A"
   },
-  "statements@example-bank.com": {
-    "name": "example-bank-account",
+  "example-bank-account": {
+    "patterns": ["statements@example-bank.com"],
     "password": "PASSWORD_B"
   },
-  "credit card statement": {
-    "name": "example-bank-credit-card",
+  "example-bank-credit-card": {
+    "patterns": ["credit card statement", "statement-202608"],
     "password": "PASSWORD_C"
   }
 }

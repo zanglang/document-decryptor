@@ -6,19 +6,21 @@ import (
 	"os"
 )
 
-// Profile describes a single configured document profile: the display name
-// used in responses/logs, and the password used to decrypt matching PDFs.
+// Profile describes a single configured document profile: the list of
+// case-insensitive substrings that identify it, and the password used to
+// decrypt matching PDFs.
 //
 // The struct is intentionally small so additional metadata (e.g. an owner,
 // a description, a retention policy) can be added later without touching
 // matching or decryption logic.
 type Profile struct {
-	Name     string `json:"name"`
-	Password string `json:"password"`
+	Patterns []string `json:"patterns"`
+	Password string   `json:"password"`
 }
 
-// PatternConfig maps a case-insensitive matching substring to the profile
-// that should be used when an identifier contains that substring.
+// PatternConfig maps a profile name to the profile definition (its matching
+// patterns and password) that should be used when an identifier contains
+// one of that profile's substrings.
 type PatternConfig map[string]Profile
 
 // LoadConfig reads and parses the pattern configuration file at path.
@@ -40,15 +42,20 @@ func LoadConfig(path string) (PatternConfig, error) {
 		return nil, fmt.Errorf("config file %q contains no patterns", path)
 	}
 
-	for pattern, profile := range cfg {
-		if pattern == "" {
-			return nil, fmt.Errorf("config contains an empty pattern key")
+	for name, profile := range cfg {
+		if name == "" {
+			return nil, fmt.Errorf("config contains an empty profile name")
 		}
-		if profile.Name == "" {
-			return nil, fmt.Errorf("pattern %q has an empty name", pattern)
+		if len(profile.Patterns) == 0 {
+			return nil, fmt.Errorf("profile %q has no patterns", name)
+		}
+		for _, pattern := range profile.Patterns {
+			if pattern == "" {
+				return nil, fmt.Errorf("profile %q has an empty pattern", name)
+			}
 		}
 		if profile.Password == "" {
-			return nil, fmt.Errorf("pattern %q has an empty password", pattern)
+			return nil, fmt.Errorf("profile %q has an empty password", name)
 		}
 	}
 

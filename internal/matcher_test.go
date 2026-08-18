@@ -12,7 +12,7 @@ func patternNames(matches []Match) []string {
 
 func TestFindMatches_ExactSubstring(t *testing.T) {
 	cfg := PatternConfig{
-		"payslip": {Name: "payslip", Password: "a"},
+		"payslip": {Patterns: []string{"payslip"}, Password: "a"},
 	}
 	matches := FindMatches(cfg, []string{"Monthly payslip"})
 	if len(matches) != 1 || matches[0].Pattern != "payslip" {
@@ -22,7 +22,7 @@ func TestFindMatches_ExactSubstring(t *testing.T) {
 
 func TestFindMatches_CaseInsensitive(t *testing.T) {
 	cfg := PatternConfig{
-		"payslip": {Name: "payslip", Password: "a"},
+		"payslip": {Patterns: []string{"payslip"}, Password: "a"},
 	}
 	matches := FindMatches(cfg, []string{"MONTHLY PAYSLIP AUGUST 2026"})
 	if len(matches) != 1 {
@@ -32,7 +32,7 @@ func TestFindMatches_CaseInsensitive(t *testing.T) {
 
 func TestFindMatches_SubstringWithinEmail(t *testing.T) {
 	cfg := PatternConfig{
-		"example-bank.com": {Name: "bank", Password: "a"},
+		"bank": {Patterns: []string{"example-bank.com"}, Password: "a"},
 	}
 	matches := FindMatches(cfg, []string{"estatements@example-bank.com"})
 	if len(matches) != 1 {
@@ -42,7 +42,7 @@ func TestFindMatches_SubstringWithinEmail(t *testing.T) {
 
 func TestFindMatches_SubstringWithinSubject(t *testing.T) {
 	cfg := PatternConfig{
-		"credit card statement": {Name: "cc", Password: "a"},
+		"cc": {Patterns: []string{"credit card statement"}, Password: "a"},
 	}
 	matches := FindMatches(cfg, []string{"August 2026 Credit Card Statement"})
 	if len(matches) != 1 {
@@ -52,7 +52,7 @@ func TestFindMatches_SubstringWithinSubject(t *testing.T) {
 
 func TestFindMatches_SubstringWithinFilename(t *testing.T) {
 	cfg := PatternConfig{
-		"statement-202608": {Name: "cc", Password: "a"},
+		"cc": {Patterns: []string{"statement-202608"}, Password: "a"},
 	}
 	matches := FindMatches(cfg, []string{"statement-202608.pdf"})
 	if len(matches) != 1 {
@@ -62,7 +62,7 @@ func TestFindMatches_SubstringWithinFilename(t *testing.T) {
 
 func TestFindMatches_Unicode(t *testing.T) {
 	cfg := PatternConfig{
-		"gehaltsabrechnung": {Name: "payslip-de", Password: "a"},
+		"payslip-de": {Patterns: []string{"gehaltsabrechnung"}, Password: "a"},
 	}
 	matches := FindMatches(cfg, []string{"GEHALTSABRECHNUNG Müller Januar"})
 	if len(matches) != 1 {
@@ -72,7 +72,7 @@ func TestFindMatches_Unicode(t *testing.T) {
 	// German sharp s / uppercase eszett style folding is not guaranteed,
 	// but basic multi-byte case folding (e.g. Cyrillic) should still work.
 	cfg2 := PatternConfig{
-		"платеж": {Name: "invoice-ru", Password: "a"},
+		"invoice-ru": {Patterns: []string{"платеж"}, Password: "a"},
 	}
 	matches2 := FindMatches(cfg2, []string{"ПЛАТЕЖ за август"})
 	if len(matches2) != 1 {
@@ -82,7 +82,7 @@ func TestFindMatches_Unicode(t *testing.T) {
 
 func TestFindMatches_ZeroMatches(t *testing.T) {
 	cfg := PatternConfig{
-		"payslip": {Name: "payslip", Password: "a"},
+		"payslip": {Patterns: []string{"payslip"}, Password: "a"},
 	}
 	matches := FindMatches(cfg, []string{"invoice.pdf", "random@example.com"})
 	if len(matches) != 0 {
@@ -92,9 +92,9 @@ func TestFindMatches_ZeroMatches(t *testing.T) {
 
 func TestFindMatches_MultipleMatches(t *testing.T) {
 	cfg := PatternConfig{
-		"payslip": {Name: "payslip", Password: "a"},
-		"august":  {Name: "august-doc", Password: "b"},
-		"invoice": {Name: "invoice", Password: "c"},
+		"payslip":    {Patterns: []string{"payslip"}, Password: "a"},
+		"august-doc": {Patterns: []string{"august"}, Password: "b"},
+		"invoice":    {Patterns: []string{"invoice"}, Password: "c"},
 	}
 	matches := FindMatches(cfg, []string{"August Payslip 2026"})
 	got := patternNames(matches)
@@ -105,10 +105,29 @@ func TestFindMatches_MultipleMatches(t *testing.T) {
 
 func TestFindMatches_PatternMatchedOnceDespiteMultipleIdentifierHits(t *testing.T) {
 	cfg := PatternConfig{
-		"payslip": {Name: "payslip", Password: "a"},
+		"payslip": {Patterns: []string{"payslip"}, Password: "a"},
 	}
 	matches := FindMatches(cfg, []string{"payslip.pdf", "Monthly Payslip", "payslip@example.com"})
 	if len(matches) != 1 {
 		t.Fatalf("expected pattern to be counted once, got %v", matches)
+	}
+}
+
+func TestFindMatches_ProfileMatchedOnceDespiteMultiplePatternHits(t *testing.T) {
+	cfg := PatternConfig{
+		"bank statements": {
+			Patterns: []string{"bills@banka.com", "statement@bankb.com", "here is your monthly statement"},
+			Password: "a",
+		},
+	}
+	matches := FindMatches(cfg, []string{"here is your monthly statement", "sent from bills@banka.com"})
+	if len(matches) != 1 {
+		t.Fatalf("expected profile to be counted once despite multiple pattern hits, got %v", matches)
+	}
+	if matches[0].ProfileName != "bank statements" {
+		t.Fatalf("expected profile name %q, got %q", "bank statements", matches[0].ProfileName)
+	}
+	if matches[0].Pattern != "bills@banka.com" {
+		t.Fatalf("expected first matching pattern in list order, got %q", matches[0].Pattern)
 	}
 }

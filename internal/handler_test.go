@@ -42,9 +42,9 @@ func testConfigPath(t *testing.T) string {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "patterns.json")
 	content := `{
-		"payslip": {"name": "company-payslip", "password": "secret-a"},
-		"credit card statement": {"name": "example-bank-credit-card", "password": "secret-b"},
-		"august": {"name": "august-catchall", "password": "secret-c"}
+		"company-payslip": {"patterns": ["payslip"], "password": "secret-a"},
+		"example-bank-credit-card": {"patterns": ["credit card statement"], "password": "secret-b"},
+		"august-catchall": {"patterns": ["august"], "password": "secret-c"}
 	}`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)

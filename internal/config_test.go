@@ -11,8 +11,8 @@ func TestLoadConfig_Valid(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "patterns.json")
 	content := `{
-		"payslip": {"name": "company-payslip", "password": "PASSWORD_A"},
-		"example-bank.com": {"name": "example-bank-account", "password": "PASSWORD_B"}
+		"company-payslip": {"patterns": ["payslip"], "password": "PASSWORD_A"},
+		"example-bank-account": {"patterns": ["example-bank.com"], "password": "PASSWORD_B"}
 	}`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -25,15 +25,16 @@ func TestLoadConfig_Valid(t *testing.T) {
 	if len(cfg) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(cfg))
 	}
-	if cfg["payslip"].Name != "company-payslip" || cfg["payslip"].Password != "PASSWORD_A" {
-		t.Fatalf("unexpected payslip entry: %+v", cfg["payslip"])
+	payslip := cfg["company-payslip"]
+	if len(payslip.Patterns) != 1 || payslip.Patterns[0] != "payslip" || payslip.Password != "PASSWORD_A" {
+		t.Fatalf("unexpected company-payslip entry: %+v", payslip)
 	}
 }
 
 func TestLoadConfig_MalformedJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "patterns.json")
-	if err := os.WriteFile(path, []byte(`{"payslip": {`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"company-payslip": {`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -66,13 +67,39 @@ func TestLoadConfig_EmptyObject(t *testing.T) {
 func TestLoadConfig_MissingPassword(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "patterns.json")
-	content := `{"payslip": {"name": "company-payslip"}}`
+	content := `{"company-payslip": {"patterns": ["payslip"]}}`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := LoadConfig(path); err == nil {
 		t.Fatal("expected error for missing password, got nil")
+	}
+}
+
+func TestLoadConfig_MissingPatterns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "patterns.json")
+	content := `{"company-payslip": {"password": "PASSWORD_A"}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("expected error for missing patterns, got nil")
+	}
+}
+
+func TestLoadConfig_EmptyPatternInList(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "patterns.json")
+	content := `{"company-payslip": {"patterns": ["payslip", ""], "password": "PASSWORD_A"}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("expected error for empty pattern in list, got nil")
 	}
 }
 
