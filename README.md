@@ -147,10 +147,11 @@ profile names on a `409`).
 | 500    | Configuration could not be read/parsed, or another internal failure |
 | 504    | `qpdf` did not finish within `QPDF_TIMEOUT_SECONDS`             |
 
-Raw `qpdf` stderr output is never returned to the caller. It may be logged
-at debug level for operator troubleshooting, but passwords, full
-configuration contents, PDF content, and raw multipart bodies are never
-logged.
+Raw `qpdf` stderr output is never returned to the caller. It's logged at
+`debug` level (see `LOG_LEVEL` below) for operator troubleshooting — e.g. to
+see *why* a particular upload got a `422`, restart with `LOG_LEVEL=debug`
+and retry the request — but passwords, full configuration contents, PDF
+content, and raw multipart bodies are never logged, at any level.
 
 ## Environment variables
 
@@ -161,6 +162,7 @@ logged.
 | `MAX_UPLOAD_BYTES`      | `10485760` (10 MiB)     | Maximum accepted PDF upload size                          |
 | `QPDF_TIMEOUT_SECONDS`  | `30`                    | Timeout for a single `qpdf` invocation                    |
 | `QPDF_BIN`              | `qpdf`                  | Path/name of the `qpdf` binary to invoke                  |
+| `LOG_LEVEL`             | `info`                  | `debug`, `info`, `warn`, or `error`. `debug` additionally logs qpdf's raw stderr output for every `qpdf --is-encrypted`/`qpdf --decrypt` invocation |
 
 ## Local build
 

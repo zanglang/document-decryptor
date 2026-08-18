@@ -231,7 +231,7 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusGatewayTimeout, "checking PDF encryption status timed out")
 		return
 	case err != nil:
-		logger.Error("request finished", "filename", filename, "result", "encryption check failed", "duration_ms", time.Since(start).Milliseconds())
+		logger.Error("request finished", "filename", filename, "error", err, "result", "encryption check failed", "duration_ms", time.Since(start).Milliseconds())
 		writeError(w, http.StatusUnprocessableEntity, "unable to inspect uploaded PDF")
 		return
 	}
@@ -299,14 +299,14 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusGatewayTimeout, "decryption timed out")
 		return
 	case err != nil:
-		logger.Error("request finished", "filename", filename, "profile", match.ProfileName, "pattern", match.Pattern, "result", "decrypt failed", "duration_ms", duration.Milliseconds())
+		logger.Error("request finished", "filename", filename, "error", err, "profile", match.ProfileName, "pattern", match.Pattern, "result", "decrypt failed", "duration_ms", duration.Milliseconds())
 		writeError(w, http.StatusUnprocessableEntity, "unable to decrypt PDF")
 		return
 	}
 
 	info, err := os.Stat(outputPath)
 	if err != nil || info.Size() == 0 {
-		logger.Error("request finished", "filename", filename, "profile", match.ProfileName, "pattern", match.Pattern, "result", "empty output", "duration_ms", duration.Milliseconds())
+		logger.Error("request finished", "filename", filename, "error", err, "profile", match.ProfileName, "pattern", match.Pattern, "result", "empty output", "duration_ms", duration.Milliseconds())
 		writeError(w, http.StatusUnprocessableEntity, "unable to decrypt PDF")
 		return
 	}

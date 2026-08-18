@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,7 +28,9 @@ const (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: parseLogLevel(getEnv("LOG_LEVEL", "info")),
+	}))
 	slog.SetDefault(logger)
 
 	listenAddr := getEnv("LISTEN_ADDR", defaultListenAddr)
@@ -58,6 +61,7 @@ func main() {
 		"config_path", configPath,
 		"max_upload_bytes", maxUploadBytes,
 		"qpdf_timeout", qpdfTimeout.String(),
+		"log_level", getEnv("LOG_LEVEL", "info"),
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -86,6 +90,21 @@ func main() {
 			os.Exit(1)
 		}
 		logger.Info("shutdown complete")
+	}
+}
+
+// parseLogLevel maps LOG_LEVEL to a slog.Level. Unrecognized values fall
+// back to Info rather than failing startup.
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(s) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
 
