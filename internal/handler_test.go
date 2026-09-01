@@ -26,9 +26,14 @@ type fakeDecryptor struct {
 	// match-and-decrypt path).
 	unencrypted    bool
 	isEncryptedErr error
+
+	// gotInput captures the contents of inputPath as seen by the last
+	// Decrypt call, so tests can assert what qpdf would have received.
+	gotInput []byte
 }
 
 func (f *fakeDecryptor) Decrypt(ctx context.Context, inputPath, outputPath, password string) error {
+	f.gotInput, _ = os.ReadFile(inputPath)
 	if f.err != nil {
 		return f.err
 	}
@@ -199,6 +204,43 @@ func TestDecrypt_OversizedUpload(t *testing.T) {
 func TestDecrypt_NonPDFUpload(t *testing.T) {
 	srv := newTestServer(t, &fakeDecryptor{})
 	body, ct := buildMultipart(t, validIdentifiers(t, []string{"payslip"}), "input.pdf", []byte("not a pdf at all"))
+	rec := doDecryptRequest(t, srv, body, ct)
+
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("expected 415, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDecrypt_PDFWithNonPDFPreamble(t *testing.T) {
+	// Some issuers (e.g. HSBC Taiwan e-statements) prepend a proprietary
+	// metadata line before the %PDF- header. The upload must still be
+	// accepted, and qpdf must receive the file with the preamble stripped.
+	dec := &fakeDecryptor{outputData: []byte("%PDF-1.4\ndecrypted!")}
+	srv := newTestServer(t, dec)
+
+	preamble := []byte("%%PUSHDATA: TW;HSBC;036-123131;;user@example.com;31/08/2026;;036-XXXXXX;;PMR;#END#%%\n")
+	upload := append(append([]byte{}, preamble...), validPDFBytes...)
+
+	body, ct := buildMultipart(t, validIdentifiers(t, []string{"Monthly Payslip 2026"}), "hsbc.pdf", upload)
+	rec := doDecryptRequest(t, srv, body, ct)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !bytes.HasPrefix(dec.gotInput, []byte("%PDF-")) {
+		t.Fatalf("qpdf input still carries the preamble: %q", dec.gotInput[:min(32, len(dec.gotInput))])
+	}
+	if !bytes.Equal(dec.gotInput, validPDFBytes) {
+		t.Fatalf("qpdf input differs from the PDF payload: %q", dec.gotInput)
+	}
+}
+
+func TestDecrypt_PreambleBeyondScanWindowRejected(t *testing.T) {
+	srv := newTestServer(t, &fakeDecryptor{})
+
+	// %PDF- sits past the first PDFHeaderScanBytes, so it must not be found.
+	upload := append(bytes.Repeat([]byte("x"), PDFHeaderScanBytes+16), validPDFBytes...)
+	body, ct := buildMultipart(t, validIdentifiers(t, []string{"payslip"}), "input.pdf", upload)
 	rec := doDecryptRequest(t, srv, body, ct)
 
 	if rec.Code != http.StatusUnsupportedMediaType {

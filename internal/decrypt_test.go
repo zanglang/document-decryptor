@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -24,6 +25,32 @@ func TestLooksLikePDF(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := LooksLikePDF(tc.header); got != tc.want {
 				t.Errorf("LooksLikePDF(%q) = %v, want %v", tc.header, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPDFHeaderOffset(t *testing.T) {
+	longPreamble := append(bytes.Repeat([]byte("x"), 200), []byte("%PDF-1.6")...)
+	pastWindow := append(bytes.Repeat([]byte("x"), PDFHeaderScanBytes+1), []byte("%PDF-1.6")...)
+
+	cases := []struct {
+		name   string
+		header []byte
+		want   int
+	}{
+		{"conventional", []byte("%PDF-1.7\n..."), 0},
+		{"hsbc preamble", []byte("%%PUSHDATA: TW;HSBC;#END#%%\n%PDF-1.6\n%\xe2\xe3"), 28},
+		{"long preamble within window", longPreamble, 200},
+		{"header past scan window", pastWindow, -1},
+		{"not a pdf", []byte("not a pdf at all"), -1},
+		{"empty", []byte(""), -1},
+		{"truncated magic", []byte("%PDF"), -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PDFHeaderOffset(tc.header); got != tc.want {
+				t.Errorf("PDFHeaderOffset(%q) = %d, want %d", tc.header, got, tc.want)
 			}
 		})
 	}

@@ -11,8 +11,15 @@ import (
 	"time"
 )
 
-// PDFMagic is the header every valid PDF file must begin with.
+// PDFMagic is the header marking the start of the PDF body.
 const PDFMagic = "%PDF-"
+
+// PDFHeaderScanBytes is how many leading bytes are scanned for PDFMagic.
+// Conventionally a PDF begins exactly with %PDF-, but the spec does not
+// require it, and tolerant readers scan roughly the first kilobyte. Some
+// issuers (e.g. HSBC Taiwan e-statements) prepend a short proprietary
+// metadata line before the header; scanning lets us find and strip it.
+const PDFHeaderScanBytes = 1024
 
 var (
 	// ErrNotPDF indicates the supplied input does not look like a PDF file.
@@ -29,6 +36,18 @@ var (
 // magic header.
 func LooksLikePDF(header []byte) bool {
 	return bytes.HasPrefix(header, []byte(PDFMagic))
+}
+
+// PDFHeaderOffset returns the byte offset of PDFMagic within the first
+// PDFHeaderScanBytes of header, or -1 if it does not appear in that range.
+// An offset of 0 is a conventional PDF that starts exactly with %PDF-; a
+// positive offset means the header is preceded by a non-PDF preamble that
+// should be stripped before qpdf sees the file.
+func PDFHeaderOffset(header []byte) int {
+	if len(header) > PDFHeaderScanBytes {
+		header = header[:PDFHeaderScanBytes]
+	}
+	return bytes.Index(header, []byte(PDFMagic))
 }
 
 // Decryptor decrypts a password-protected PDF file on disk. It exists as an
@@ -129,9 +148,9 @@ func (q *QPDFDecryptor) Decrypt(ctx context.Context, inputPath, outputPath, pass
 //
 // qpdf exits 0 if the file is encrypted, 2 if it is not (or if it can't be
 // read at all, e.g. it's damaged). Since callers only invoke this after
-// LooksLikePDF has already confirmed the file starts with the PDF magic
-// header, an exit code of 2 is treated as "not encrypted" rather than as an
-// error.
+// PDFHeaderOffset has already located the PDF magic header (and stripped any
+// preamble before it), an exit code of 2 is treated as "not encrypted"
+// rather than as an error.
 func (q *QPDFDecryptor) IsEncrypted(ctx context.Context, path string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, q.timeout())
 	defer cancel()

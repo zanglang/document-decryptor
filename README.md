@@ -71,6 +71,16 @@ decrypted PDF as the body, plus:
 See [`patterns.json` format](#patternsjson-format) and [Error
 responses](#error-responses) below.
 
+### Header tolerance
+
+A conforming PDF starts with `%PDF-`, but the spec does not require it at
+byte 0 and tolerant readers scan the first bytes for it. Some issuers (e.g.
+HSBC Taiwan e-statements) prepend a proprietary metadata line before the
+header. The service scans the first 1024 bytes for `%PDF-`; if it's found at
+a non-zero offset the preamble is stripped before `qpdf` inspects or
+decrypts the file (a `stripped non-PDF preamble` log line records it). If
+`%PDF-` is not found in that window the upload is rejected with `415`.
+
 ### Echo mode
 
 Before doing any pattern matching, the service checks whether the uploaded
@@ -145,7 +155,7 @@ profile names on a `409`).
 | 404    | No configured profile matched the supplied identifiers         |
 | 409    | Multiple configured profiles matched the supplied identifiers  |
 | 413    | Uploaded file exceeds `MAX_UPLOAD_BYTES`                        |
-| 415    | Uploaded file does not begin with the PDF magic header (`%PDF-`) |
+| 415    | The PDF magic header (`%PDF-`) was not found within the first 1024 bytes of the upload |
 | 422    | `qpdf` could not inspect or decrypt the PDF (e.g. wrong password, corrupted file) |
 | 500    | Configuration could not be read/parsed, or another internal failure |
 | 504    | `qpdf` did not finish within `QPDF_TIMEOUT_SECONDS`             |
