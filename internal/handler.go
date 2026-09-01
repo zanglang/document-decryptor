@@ -209,7 +209,7 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 
 	logger.Info("request received", "filename", filename, "identifier_count", len(identifiers))
 
-	header := make([]byte, len(PDFMagic))
+	header := make([]byte, PDFHeaderScanBytes)
 	f, err := os.Open(inputPath)
 	if err != nil {
 		logger.Error("failed to reopen input file", "error", err)
@@ -218,10 +218,27 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 	}
 	n, _ := io.ReadFull(f, header)
 	f.Close()
-	if n < len(header) || !LooksLikePDF(header) {
+	header = header[:n]
+
+	offset := PDFHeaderOffset(header)
+	if offset < 0 {
 		logger.Warn("rejected upload: not a PDF", "filename", filename)
 		writeError(w, http.StatusUnsupportedMediaType, "uploaded file is not a PDF")
 		return
+	}
+	if offset > 0 {
+		// The %PDF- header is preceded by a non-PDF preamble (e.g. HSBC
+		// Taiwan e-statements prepend a proprietary metadata line). Tolerant
+		// PDF readers scan for the header rather than requiring it at offset
+		// 0; match that by stripping the preamble before qpdf sees the file.
+		strippedPath := filepath.Join(workDir, "input.stripped.pdf")
+		if err := stripLeadingBytes(inputPath, strippedPath, int64(offset)); err != nil {
+			logger.Error("failed to strip non-PDF preamble", "error", err, "filename", filename)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		logger.Info("stripped non-PDF preamble before PDF header", "filename", filename, "preamble_bytes", offset)
+		inputPath = strippedPath
 	}
 
 	encrypted, err := s.Decryptor.IsEncrypted(r.Context(), inputPath)
@@ -333,4 +350,27 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 
 func isRequestTooLarge(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "http: request body too large")
+}
+
+// stripLeadingBytes copies src to dst, omitting the first n bytes. It is used
+// to remove a non-PDF preamble that precedes the %PDF- header so qpdf
+// receives a spec-compliant file.
+func stripLeadingBytes(src, dst string, n int64) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if _, err := in.Seek(n, io.SeekStart); err != nil {
+		return err
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
